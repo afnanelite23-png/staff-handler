@@ -25,8 +25,29 @@ bot = commands.Bot(
     help_command=None
 )
 
+# =========================
+# CUSTOM EMOJI CONFIGURATION
+# =========================
+# Replace the placeholder text with your custom Discord emojis:
+# Format: "<:name:id>" or "<a:animated_name:id>"
+# Example: "<:success:123456789012345678>"
+
+EMOJIS = {
+    "promo": "<a:giveaway:1559999666068791359>",         # Custom Promotion Emoji
+    "demo": "<:angry:1274605955035693057>",           # Custom Demotion Emoji
+    "shield": "<:z_mod_DiscordShield:1560000554909040694>",       # Custom Supervisor / Staff Emoji
+    "gear": "<a:02b_orangeflower:1560000626522329239>",           # Custom Settings Emoji
+    "ladder": "<:16400redswordrankicon:1560003340492865639>",       # Custom Rank Ladder Emoji
+    "announcement": "<a:1369announce:1560000473623437376>",# Custom Channel Announcement Emoji
+    "audit": "<a:a7_book:1559999925822165105>",         # Custom Audit Log Emoji
+    "success": "<a:MW_tick:1559999735329456220>",     # Custom Checkmark / Success Emoji
+    "warning": "<a:03_awarndns:1560000005492703303>",     # Custom Warning Emoji
+    "error": "<a:error:1560000088732999810>",         # Custom Denied / Error Emoji
+    "user": "<:ntl_user:1556434847856328726>",           # Custom User Profile Emoji
+    "bullet": "<:MW_arrow_right:1560001178937598175>"        # Custom Select Option Bullet Emoji
+}
+
 # Persistent settings
-# Added "rank_ladders" to store ordered role lists per guild
 config = {
     "supervisor_roles": {},
     "promodemo_channels": {},
@@ -152,13 +173,13 @@ async def send_promodemo_embed(
 
     embed = discord.Embed(
         title=(
-            "🚀 Staff Promotion"
-            if promoted else "🔻 Staff Demotion"
+            f"{EMOJIS['promo']} Staff Promotion"
+            if promoted else f"{EMOJIS['demo']} Staff Demotion"
         ),
         description=(
-            f"{member.mention} has been **promoted**! ✨"
+            f"{member.mention} has been **promoted**!"
             if promoted else
-            f"{member.mention} has been **demoted**. 📉"
+            f"{member.mention} has been **demoted**."
         ),
         color=(
             discord.Color.green()
@@ -168,19 +189,19 @@ async def send_promodemo_embed(
     )
 
     embed.add_field(
-        name="👤 Staff Member",
+        name=f"{EMOJIS['user']} Staff Member",
         value=f"{member.mention}\n`{member.id}`",
         inline=False
     )
 
     embed.add_field(
-        name="🏷️ Role",
+        name=f"{EMOJIS['ladder']} Role",
         value=role.mention,
         inline=True
     )
 
     embed.add_field(
-        name="🛡️ Action By",
+        name=f"{EMOJIS['shield']} Action By",
         value=moderator.mention,
         inline=True
     )
@@ -205,14 +226,14 @@ async def send_promodemo_embed(
 
 class RankSelect(discord.ui.Select):
     def __init__(self, guild: discord.Guild):
-        # Filter out default and managed roles, keep up to 25 for select menu limits
         roles = [r for r in guild.roles if not r.is_default() and not r.managed][:25]
         
+        # Select options accept discord.PartialEmoji or raw unicode/custom emoji string
         options = [
             discord.SelectOption(
                 label=role.name, 
                 value=str(role.id), 
-                emoji="🔹"
+                emoji=EMOJIS["bullet"]
             ) for role in roles
         ]
 
@@ -220,7 +241,7 @@ class RankSelect(discord.ui.Select):
             options = [discord.SelectOption(label="No valid roles available", value="none")]
 
         super().__init__(
-            placeholder="📌 Select staff ranks in order (Lowest to Highest)...",
+            placeholder="Select staff ranks in order (Lowest to Highest)...",
             min_values=1,
             max_values=len(options),
             options=options
@@ -228,7 +249,7 @@ class RankSelect(discord.ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         if self.values == ["none"]:
-            await interaction.response.send_message("❌ No valid roles to configure.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJIS['error']} No valid roles to configure.", ephemeral=True)
             return
 
         guild_id = str(interaction.guild.id)
@@ -243,7 +264,7 @@ class RankSelect(discord.ui.Select):
         roles_mention = ", ".join([f"<@&{r_id}>" for r_id in selected_role_ids])
         
         embed = discord.Embed(
-            title="✅ Rank Ladder Configured Successfully!",
+            title=f"{EMOJIS['success']} Rank Ladder Configured Successfully!",
             description=f"**Ordered Ladder Hierarchy:**\n{roles_mention}\n\n*Now you can use `>promo @member` without specifying a role to auto-promote to the next rank!*",
             color=discord.Color.green()
         )
@@ -262,44 +283,44 @@ class RankSelectView(discord.ui.View):
 
 async def change_staff_role(ctx, member, role, action):
     if member.id == ctx.author.id:
-        await ctx.reply("⚠️ You cannot change your own staff role.")
+        await ctx.reply(f"{EMOJIS['warning']} You cannot change your own staff role.")
         return
 
     if member.id == ctx.guild.owner_id:
-        await ctx.reply("⚠️ You cannot modify the server owner's roles.")
+        await ctx.reply(f"{EMOJIS['warning']} You cannot modify the server owner's roles.")
         return
 
     if role.is_default() or role.managed:
-        await ctx.reply("⚠️ That role cannot be assigned.")
+        await ctx.reply(f"{EMOJIS['warning']} That role cannot be assigned.")
         return
 
     bot_member = ctx.guild.me
 
     if bot_member is None or role >= bot_member.top_role:
         await ctx.reply(
-            "⚠️ My highest role must be above the selected role."
+            f"{EMOJIS['warning']} My highest role must be above the selected role."
         )
         return
 
     if ctx.author.id != OWNER_ID:
         if role >= ctx.author.top_role:
             await ctx.reply(
-                "⚠️ You cannot manage a role equal to or above yours."
+                f"{EMOJIS['warning']} You cannot manage a role equal to or above yours."
             )
             return
 
         if member.top_role >= ctx.author.top_role:
             await ctx.reply(
-                "⚠️ You cannot manage a member equal to or above you."
+                f"{EMOJIS['warning']} You cannot manage a member equal to or above you."
             )
             return
 
     if action == "promote" and role in member.roles:
-        await ctx.reply("⚠️ That member already has this role.")
+        await ctx.reply(f"{EMOJIS['warning']} That member already has this role.")
         return
 
     if action == "demote" and role not in member.roles:
-        await ctx.reply("⚠️ That member does not have this role.")
+        await ctx.reply(f"{EMOJIS['warning']} That member does not have this role.")
         return
 
     try:
@@ -332,20 +353,20 @@ async def change_staff_role(ctx, member, role, action):
             f"By: {ctx.author} ({ctx.author.id})"
         )
 
-        emoji = "🚀" if result == "promoted" else "🔻"
+        emoji = EMOJIS['promo'] if result == "promoted" else EMOJIS['demo']
         await ctx.reply(
             f"{emoji} {member.mention} was **{result}**: {role.mention}"
         )
 
     except discord.Forbidden:
         await ctx.reply(
-            "⛔ I lack permission to change that role. "
+            f"{EMOJIS['error']} I lack permission to change that role. "
             "Check my Manage Roles permission and role hierarchy."
         )
 
     except discord.HTTPException:
         logging.exception("Role change failed")
-        await ctx.reply("❌ Discord rejected the role change.")
+        await ctx.reply(f"{EMOJIS['error']} Discord rejected the role change.")
 
 
 # =========================
@@ -360,10 +381,9 @@ async def promo(ctx, staff: discord.Member, role: discord.Role = None):
     if role is None:
         ladder = config.get("rank_ladders", {}).get(str(ctx.guild.id))
         if not ladder:
-            await ctx.reply("⚠️ No rank ladder has been set up yet! Use `>setranks` or specify a role manually (`>promo @member @role`).")
+            await ctx.reply(f"{EMOJIS['warning']} No rank ladder has been set up yet! Use `>setranks` or specify a role manually (`>promo @member @role`).")
             return
         
-        # Determine next rank based on ladder
         user_role_ids = [r.id for r in staff.roles]
         matched_index = -1
         
@@ -371,15 +391,14 @@ async def promo(ctx, staff: discord.Member, role: discord.Role = None):
             if r_id in user_role_ids:
                 matched_index = idx
         
-        # If user has no rank in ladder, pick the first one. Otherwise, pick the next one.
         next_index = matched_index + 1
         if next_index >= len(ladder):
-            await ctx.reply(f"⚠️ {staff.mention} is already at the highest rank on the ladder!")
+            await ctx.reply(f"{EMOJIS['warning']} {staff.mention} is already at the highest rank on the ladder!")
             return
             
         role = ctx.guild.get_role(ladder[next_index])
         if role is None:
-            await ctx.reply("❌ The configured next rank role no longer exists in this server.")
+            await ctx.reply(f"{EMOJIS['error']} The configured next rank role no longer exists in this server.")
             return
 
     await change_staff_role(ctx, staff, role, "promote")
@@ -407,7 +426,7 @@ async def setranks(ctx):
     """Opens an interactive dropdown menu to configure the staff rank ladder sequence."""
     view = RankSelectView(ctx.guild)
     embed = discord.Embed(
-        title="📊 Staff Rank Ladder Setup",
+        title=f"{EMOJIS['ladder']} Staff Rank Ladder Setup",
         description="Select the staff roles below **in order from lowest to highest rank** using the dropdown menu.\n\n*This allows automatic promotion using `>promo @member`.*",
         color=discord.Color.blurple()
     )
@@ -419,14 +438,14 @@ async def setranks(ctx):
 @is_owner()
 async def setstaffsupervisor(ctx, role: discord.Role):
     if role.is_default() or role.managed:
-        await ctx.reply("⚠️ Choose a normal server role.")
+        await ctx.reply(f"{EMOJIS['warning']} Choose a normal server role.")
         return
 
     config["supervisor_roles"][str(ctx.guild.id)] = role.id
     save_config()
 
     embed = discord.Embed(
-        title="🛡️ Staff Supervisor Configured",
+        title=f"{EMOJIS['shield']} Staff Supervisor Configured",
         description=(
             f"Authorized staff supervisors: {role.mention}\n\n"
             "Members with this role can use `>promo` and `>demo`."
@@ -446,7 +465,7 @@ async def setpromodemo(ctx, channel: discord.TextChannel):
     save_config()
 
     embed = discord.Embed(
-        title="📢 Promotion & Demotion Channel Set",
+        title=f"{EMOJIS['announcement']} Promotion & Demotion Channel Set",
         description=(
             f"Channel: {channel.mention}\n\n"
             "Promotion and demotion announcements will appear here."
@@ -464,7 +483,7 @@ async def setpromodemo(ctx, channel: discord.TextChannel):
 async def setaudit(ctx, channel: discord.TextChannel):
     config["audit_channels"][str(ctx.guild.id)] = channel.id
     save_config()
-    await ctx.reply(f"✅ Audit log channel set to {channel.mention}")
+    await ctx.reply(f"{EMOJIS['success']} Audit log channel set to {channel.mention}")
 
 
 # =========================
@@ -487,27 +506,27 @@ async def staffsettings(ctx):
     ladder_str = " -> ".join([f"<@&{r_id}>" for r_id in ladder]) if ladder else "Not configured"
 
     embed = discord.Embed(
-        title="⚙️ Staff Bot Settings",
+        title=f"{EMOJIS['gear']} Staff Bot Settings",
         color=discord.Color.blurple()
     )
 
     embed.add_field(
-        name="🛡️ Supervisor Role",
+        name=f"{EMOJIS['shield']} Supervisor Role",
         value=supervisor.mention if supervisor else "Not configured",
         inline=False
     )
     embed.add_field(
-        name="📢 Promo/Demo Channel",
+        name=f"{EMOJIS['announcement']} Promo/Demo Channel",
         value=promo_channel.mention if promo_channel else "Not configured",
         inline=False
     )
     embed.add_field(
-        name="📋 Audit Channel",
+        name=f"{EMOJIS['audit']} Audit Channel",
         value=audit_channel.mention if audit_channel else "Not configured",
         inline=False
     )
     embed.add_field(
-        name="📊 Rank Ladder Sequence",
+        name=f"{EMOJIS['ladder']} Rank Ladder Sequence",
         value=ladder_str,
         inline=False
     )
@@ -522,29 +541,29 @@ async def staffsettings(ctx):
 @bot.command(name="help")
 async def help_command(ctx):
     embed = discord.Embed(
-        title="📋 Staff Management Bot - Help Center",
-        description="Here is a complete list of commands with custom visual categories:",
+        title=f"{EMOJIS['gear']} Staff Management Bot - Help Center",
+        description="Here is a complete list of commands:",
         color=discord.Color.blurple(),
         timestamp=discord.utils.utcnow()
     )
 
     embed.add_field(
-        name="🛡️ Staff Supervisor Commands",
+        name=f"{EMOJIS['shield']} Staff Supervisor Commands",
         value=(
-            "`>promo @member [@role]` — Promote a staff member (Auto-promotes to next rank if role is omitted)\n"
-            "`>demo @member @role` — Demote a staff member by removing a role"
+            f"`>promo @member [@role]` — Promote a staff member (Auto-promotes to next rank if role is omitted)\n"
+            f"`>demo @member @role` — Demote a staff member by removing a role"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="⚙️ Bot Owner Setup Commands",
+        name=f"{EMOJIS['gear']} Bot Owner Setup Commands",
         value=(
-            "`>setranks` — Open interactive menu to configure the server rank ladder\n"
-            "`>setstaffsupervisor @role` — Set the designated supervisor role\n"
-            "`>setpromodemo #channel` — Set the promotion/demotion announcement channel\n"
-            "`>setaudit #channel` — Set the audit log channel\n"
-            "`>staffsettings` — View the current server configuration settings"
+            f"`>setranks` — Open interactive menu to configure the rank ladder\n"
+            f"`>setstaffsupervisor @role` — Set the supervisor role\n"
+            f"`>setpromodemo #channel` — Set the announcement channel\n"
+            f"`>setaudit #channel` — Set the audit log channel\n"
+            f"`>staffsettings` — View the server configuration settings"
         ),
         inline=False
     )
@@ -573,29 +592,29 @@ async def on_command_error(ctx, error):
         return
 
     if isinstance(error, commands.CheckFailure):
-        await ctx.reply("⛔ You don't have permission to use this command.")
+        await ctx.reply(f"{EMOJIS['error']} You don't have permission to use this command.")
 
     elif isinstance(error, commands.MissingRequiredArgument):
-        await ctx.reply("⚠️ Missing argument. Use `>help` to see command syntax.")
+        await ctx.reply(f"{EMOJIS['warning']} Missing argument. Use `>help` to see command syntax.")
 
     elif isinstance(error, commands.MemberNotFound):
-        await ctx.reply("❌ Member not found. Mention a valid member.")
+        await ctx.reply(f"{EMOJIS['error']} Member not found. Mention a valid member.")
 
     elif isinstance(error, commands.RoleNotFound):
-        await ctx.reply("❌ Role not found. Mention a valid role.")
+        await ctx.reply(f"{EMOJIS['error']} Role not found. Mention a valid role.")
 
     elif isinstance(error, commands.ChannelNotFound):
-        await ctx.reply("❌ Channel not found. Mention a valid text channel.")
+        await ctx.reply(f"{EMOJIS['error']} Channel not found. Mention a valid text channel.")
 
     elif isinstance(error, commands.BadArgument):
-        await ctx.reply("⚠️ Invalid argument. Check your mentions or types.")
+        await ctx.reply(f"{EMOJIS['warning']} Invalid argument. Check your mentions or types.")
 
     elif isinstance(error, commands.NoPrivateMessage):
-        await ctx.reply("⚠️ This command can only be used in a server.")
+        await ctx.reply(f"{EMOJIS['warning']} This command can only be used in a server.")
 
     else:
         logging.exception("Unhandled command error", exc_info=error)
-        await ctx.reply("❌ An unexpected error occurred.")
+        await ctx.reply(f"{EMOJIS['error']} An unexpected error occurred.")
 
 
 # =========================
