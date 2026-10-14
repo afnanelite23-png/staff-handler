@@ -36,7 +36,7 @@ EMOJIS = {
     "promo": "<a:giveaway:1559999666068791359>",         # Custom Promotion Emoji
     "demo": "<:angry:1274605955035693057>",           # Custom Demotion Emoji
     "shield": "<:z_mod_DiscordShield:1560000554909040694>",       # Custom Supervisor / Staff Emoji
-    "gear": "<a:02b_orangeflower:1560000626522329239>",           # Custom Settings Emoji
+    "gear": "<:Settings:1560007503239188594>",           # Custom Settings Emoji
     "ladder": "<:16400redswordrankicon:1560003340492865639>",       # Custom Rank Ladder Emoji
     "announcement": "<a:1369announce:1560000473623437376>",# Custom Channel Announcement Emoji
     "audit": "<a:a7_book:1559999925822165105>",         # Custom Audit Log Emoji
