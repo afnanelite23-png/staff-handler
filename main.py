@@ -420,13 +420,6 @@ async def roll(ctx):
     await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} You rolled a **{result}**!", color=discord.Color.gold()))
 
 
-@bot.command(name="8ball")
-async def magic_8ball(ctx, *, question: str):
-    """Asks the magic 8ball."""
-    responses = ["Yes.", "No.", "Definitely.", "Ask again later.", "Outlook not so good.", "Without a doubt."]
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Question: {question}\nAnswer: **{random.choice(responses)}**", color=discord.Color.purple()))
-
-
 # =========================
 # SETUP COMMANDS
 # =========================
@@ -485,7 +478,7 @@ async def help_command(ctx):
     embed.add_field(name=f"{EMOJIS['shield']} Staff & Management", value="`>promo`, `>demo`, `>super`, `>staff`, `>role`, `>steal`", inline=False)
     embed.add_field(name=f"{EMOJIS['warning']} Moderation", value="`>kick`, `>ban`, `>clear`, `>mute`", inline=False)
     embed.add_field(name=f"{EMOJIS['user']} Utility & Info", value="`>ping`, `>serverinfo`, `>userinfo`, `>avatar`", inline=False)
-    embed.add_field(name=f"{EMOJIS['success']} Fun & Games", value="`>coinflip`, `>roll`, `>8ball`", inline=False)
+    embed.add_field(name=f"{EMOJIS['success']} Fun & Games", value="`>coinflip`, `>roll`", inline=False)
     embed.add_field(name=f"{EMOJIS['gear']} Setup", value="`>setranks`, `>setstaffsupervisor`, `>setpromodemo`, `>setaudit`, `>staffsettings`", inline=False)
     await ctx.reply(embed=embed, mention_author=False)
 
