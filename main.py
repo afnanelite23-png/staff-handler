@@ -421,7 +421,7 @@ async def roll(ctx):
 
 
 @bot.command(name="8ball")
-async def magic8ball(ctx, *, question: str):
+async def magic_8ball(ctx, *, question: str):
     """Asks the magic 8ball."""
     responses = ["Yes.", "No.", "Definitely.", "Ask again later.", "Outlook not so good.", "Without a doubt."]
     await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Question: {question}\nAnswer: **{random.choice(responses)}**", color=discord.Color.purple()))
