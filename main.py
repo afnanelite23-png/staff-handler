@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -223,24 +224,20 @@ async def send_promodemo_embed(
 
 class RankSelect(discord.ui.Select):
     def __init__(self, guild: discord.Guild):
-        roles = [r for r in guild.roles if not r.is_default() and not r.managed][:25]
+        # Exclude @everyone and managed roles, limit to 25 safely
+        roles = [r for r in guild.roles if not r.is_default() and not r.managed and r < guild.me.top_role][:25]
         
-        parsed_emoji = None
-        try:
-            parsed_emoji = discord.PartialEmoji.from_str(EMOJIS["bullet"])
-        except Exception:
-            pass
-
-        options = [
-            discord.SelectOption(
-                label=role.name[:100], 
-                value=str(role.id), 
-                emoji=parsed_emoji
-            ) for role in roles
-        ]
+        options = []
+        for role in roles:
+            options.append(
+                discord.SelectOption(
+                    label=role.name[:100], 
+                    value=str(role.id)
+                )
+            )
 
         if not options:
-            options = [discord.SelectOption(label="No valid roles available", value="none")]
+            options = [discord.SelectOption(label="No valid assignable roles", value="none")]
 
         super().__init__(
             placeholder="Select staff ranks in order (Lowest to Highest)...",
@@ -439,7 +436,7 @@ async def demo(ctx, staff: discord.Member, role: discord.Role = None):
 
 
 # =========================
-# NEW COMMANDS: >super & >staff
+# NEW COMMANDS: >super, >staff, >role, >steal
 # =========================
 
 @bot.command()
@@ -522,6 +519,73 @@ async def staff(ctx, member: discord.Member):
         await audit(ctx.guild, f"Staff roles ({assigned_mentions}) given to {member} ({member.id}) by {ctx.author}")
     except discord.Forbidden:
         await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} I lack permissions to assign one or more of those roles.", color=discord.Color.red()))
+
+
+@bot.command()
+@commands.guild_only()
+@is_supervisor()
+async def role(ctx, member: discord.Member, role: discord.Role):
+    """Quickly adds or removes a role from a member."""
+    if role.is_default() or role.managed:
+        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} You cannot manage that role.", color=discord.Color.orange()))
+        return
+
+    try:
+        if role in member.roles:
+            await member.remove_roles(role, reason=f"Role removed by {ctx.author}")
+            embed = discord.Embed(
+                description=f"{EMOJIS['demo']} Removed {role.mention} from {member.mention}.",
+                color=discord.Color.red()
+            )
+        else:
+            await member.add_roles(role, reason=f"Role added by {ctx.author}")
+            embed = discord.Embed(
+                description=f"{EMOJIS['promo']} Added {role.mention} to {member.mention}.",
+                color=discord.Color.green()
+            )
+        await ctx.reply(embed=embed)
+    except discord.Forbidden:
+        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} I lack permissions to manage this role.", color=discord.Color.red()))
+
+
+@bot.command()
+@commands.guild_only()
+@is_owner()
+async def steal(ctx, emoji: str, name: str = None):
+    """Steals an emoji and adds it to the current server (`>steal :emoji: [name]`)."""
+    import re
+    custom_emoji_match = re.match(r"<(a?):([a-zA-Z0-9_]+):([0-9]+)>", emoji)
+    
+    if not custom_emoji_match:
+        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Please provide a valid custom emoji from another server.", color=discord.Color.red()))
+        return
+
+    animated, emoji_name, emoji_id = custom_emoji_match.groups()
+    if not name:
+        name = emoji_name
+
+    extension = "gif" if animated == "a" else "png"
+    url = f"https://cdn.discordapp.com/emojis/{emoji_id}.{extension}?v=1"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Could not fetch emoji image.", color=discord.Color.red()))
+                    return
+                image_bytes = await resp.read()
+
+        new_emoji = await ctx.guild.create_custom_emoji(name=name, image=image_bytes, reason=f"Stolen by {ctx.author}")
+        embed = discord.Embed(
+            title=f"{EMOJIS['success']} Emoji Added!",
+            description=f"Successfully added {new_emoji} (`:{new_emoji.name}:`) to the server.",
+            color=discord.Color.green()
+        )
+        await ctx.reply(embed=embed)
+    except discord.Forbidden:
+        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} I lack 'Manage Emojis and Stickers' permissions.", color=discord.Color.red()))
+    except discord.HTTPException as e:
+        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Failed to upload emoji: {e}", color=discord.Color.red()))
 
 
 # =========================
@@ -659,8 +723,9 @@ async def help_command(ctx):
     embed.add_field(
         name=f"{EMOJIS['shield']} Staff Supervisor Commands",
         value=(
-            f"`>promo @member [@role]` — Promote a staff member (Auto-promotes to next rank if omitted)\n"
-            f"`>demo @member [@role]` — Demote a staff member (Auto-demotes to previous rank if role omitted)"
+            f"`>promo @member [@role]` — Promote a staff member (Auto-promotes if role omitted)\n"
+            f"`>demo @member [@role]` — Demote a staff member (Auto-demotes if role omitted)\n"
+            f"`>role @member @role` — Quickly add or remove a role"
         ),
         inline=False
     )
@@ -670,6 +735,7 @@ async def help_command(ctx):
         value=(
             f"`>super @member` — Automatically give a user the supervisor role\n"
             f"`>staff @member` — Automatically give a user Junior Moderator and Staff Team roles\n"
+            f"`>steal :emoji: [name]` — Steal and add a custom emoji to this server\n"
             f"`>setranks` — Open interactive menu to configure the rank ladder\n"
             f"`>setstaffsupervisor @role` — Set the supervisor role\n"
             f"`>setpromodemo #channel` — Set the announcement channel\n"
