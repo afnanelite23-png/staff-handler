@@ -2,66 +2,68 @@ import os
 import json
 import logging
 import random
+import asyncio
 import aiohttp
 import discord
 from discord.ext import commands
 
-# =========================
-# CONFIGURATION
-# =========================
-
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = int(os.getenv("BOT_OWNER_ID", "0"))
-
 CONFIG_FILE = "config.json"
+PREFIX = ">"
 
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(
-    command_prefix=">",
-    intents=intents,
-    help_command=None
-)
+bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-# =========================
-# CUSTOM EMOJI CONFIGURATION
-# =========================
-
-EMOJIS = {
-    "promo": "<a:giveaway:1559999666068791359>",
-    "demo": "<:angry:1274605955035693057>",
-    "shield": "<:z_mod_DiscordShield:1560000554909040694>",
-    "gear": "<:Settings:1560007503239188594>",
-    "ladder": "<:16400redswordrankicon:1560003340492865639>",
-    "announcement": "<a:1369announce:1560000473623437376>",
-    "audit": "<a:a7_book:1559999925822165105>",
-    "success": "<a:MW_tick:1559999735329456220>",
-    "warning": "<a:03_awarndns:1560000005492703303>",
-    "error": "<a:error:1560000088732999810>",
-    "user": "<:ntl_user:1556434847856328726>",
-    "bullet": "<:MW_arrow_right:1560001178937598175>"
+# Twemoji graphics are CC BY 4.0. Source: https://github.com/twitter/twemoji
+TWEMOJI_ASSETS = {
+    "bot_check": "2705",
+    "bot_cross": "274c",
+    "bot_info": "2139",
+    "bot_warning": "26a0",
+    "bot_star": "2b50",
+    "bot_shield": "1f6e1",
+    "bot_tools": "1f6e0",
+    "bot_notice": "1f4e2",
+    "bot_calendar": "1f4c5",
+    "bot_clock": "23f0",
+    "bot_party": "1f389",
+    "bot_gift": "1f381",
+    "bot_fire": "1f525",
+    "bot_heart": "2764",
+    "bot_lock": "1f512",
+    "bot_chat": "1f4ac",
+    "bot_trophy": "1f3c6",
+    "bot_wave": "1f44b",
+    "bot_thumbsup": "1f44d",
+    "bot_sparkles": "1f31f",
 }
 
-config = {
-    "supervisor_roles": {},
-    "promodemo_channels": {},
-    "audit_channels": {},
-    "rank_ladders": {}
+DEFAULT_CONFIG = {
+    "welcome_channels": {},
+    "warnings": {},
 }
+
+config = DEFAULT_CONFIG.copy()
 
 
 def load_config():
     global config
+
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as file:
             saved = json.load(file)
-        for key in config:
+
+        for key, default in DEFAULT_CONFIG.items():
             if isinstance(saved.get(key), dict):
                 config[key] = saved[key]
+            else:
+                config[key] = default.copy()
+
     except FileNotFoundError:
         save_config()
     except (json.JSONDecodeError, OSError):
@@ -70,434 +72,594 @@ def load_config():
 
 def save_config():
     temporary_file = CONFIG_FILE + ".tmp"
+
     try:
         with open(temporary_file, "w", encoding="utf-8") as file:
             json.dump(config, file, indent=4)
+
         os.replace(temporary_file, CONFIG_FILE)
     except OSError:
-        logging.exception("Could not save configuration")
+        logging.exception("Could not save config.json")
 
 
-def guild_setting(setting, guild_id):
-    return config[setting].get(str(guild_id))
+def get_emoji(guild, name, fallback):
+    """Use the server's uploaded custom emoji, or a Unicode fallback."""
+    if guild:
+        emoji = discord.utils.get(guild.emojis, name=name)
+        if emoji:
+            return str(emoji)
+    return fallback
 
 
-# =========================
-# PERMISSION CHECKS
-# =========================
-
-def is_owner():
-    async def predicate(ctx):
-        return ctx.author.id == OWNER_ID
-    return commands.check(predicate)
-
-
-def is_supervisor():
-    async def predicate(ctx):
-        if ctx.author.id == OWNER_ID:
-            return True
-        role_id = guild_setting("supervisor_roles", ctx.guild.id)
-        if not role_id:
-            return False
-        return any(role.id == int(role_id) for role in ctx.author.roles)
-    return commands.check(predicate)
-
-
-# =========================
-# AUDIT LOGGING
-# =========================
-
-async def audit(guild, message):
-    channel_id = guild_setting("audit_channels", guild.id)
-    if not channel_id:
-        return
-    channel = guild.get_channel(int(channel_id))
-    if channel is None:
-        return
-    try:
-        await channel.send(message, allowed_mentions=discord.AllowedMentions.none())
-    except discord.HTTPException:
-        logging.exception("Failed to send audit log")
-
-
-# =========================
-# EMBED HELPERS
-# =========================
-
-async def send_promodemo_embed(guild, member, role, action, moderator):
-    channel_id = guild_setting("promodemo_channels", guild.id)
-    if not channel_id:
-        return
-    channel = guild.get_channel(int(channel_id))
-    if channel is None:
-        return
-
-    promoted = action == "promoted"
+def make_embed(guild, title, description=None, color=discord.Color.blurple()):
     embed = discord.Embed(
-        title=f"{EMOJIS['promo']} Staff Promotion" if promoted else f"{EMOJIS['demo']} Staff Demotion",
-        description=f"{member.mention} has been **promoted**!" if promoted else f"{member.mention} has been **demoted**.",
-        color=discord.Color.green() if promoted else discord.Color.red(),
-        timestamp=discord.utils.utcnow()
+        title=title,
+        description=description,
+        color=color,
+        timestamp=discord.utils.utcnow(),
     )
-    embed.add_field(name=f"{EMOJIS['user']} Staff Member", value=f"{member.mention}\n`{member.id}`", inline=False)
-    embed.add_field(name=f"{EMOJIS['ladder']} Role", value=role.mention, inline=True)
-    embed.add_field(name=f"{EMOJIS['shield']} Action By", value=moderator.mention, inline=True)
-    embed.set_thumbnail(url=member.display_avatar.url)
-    embed.set_footer(text=f"{guild.name} • Staff Management System")
 
-    try:
-        await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
-    except discord.HTTPException:
-        pass
-
-
-# =========================
-# RANK LADDER SETUP VIEW
-# =========================
-
-class RankSelect(discord.ui.Select):
-    def __init__(self, guild: discord.Guild):
-        roles = [r for r in guild.roles if not r.is_default() and not r.managed and r < guild.me.top_role][:25]
-        options = [discord.SelectOption(label=role.name[:100], value=str(role.id)) for role in roles]
-        if not options:
-            options = [discord.SelectOption(label="No valid assignable roles", value="none")]
-        super().__init__(placeholder="Select staff ranks in order (Lowest to Highest)...", min_values=1, max_values=len(options), options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        if self.values == ["none"]:
-            await interaction.response.send_message(f"{EMOJIS['error']} No valid roles to configure.", ephemeral=True)
-            return
-
-        guild_id = str(interaction.guild.id)
-        selected_role_ids = [int(val) for val in self.values]
-        if "rank_ladders" not in config:
-            config["rank_ladders"] = {}
-        config["rank_ladders"][guild_id] = selected_role_ids
-        save_config()
-
-        roles_mention = ", ".join([f"<@&{r_id}>" for r_id in selected_role_ids])
-        embed = discord.Embed(
-            title=f"{EMOJIS['success']} Rank Ladder Configured Successfully!",
-            description=f"**Ordered Ladder Hierarchy:**\n{roles_mention}",
-            color=discord.Color.green()
+    if bot.user:
+        embed.set_author(
+            name=bot.user.display_name,
+            icon_url=bot.user.display_avatar.url,
         )
-        await interaction.response.edit_message(embed=embed, view=None)
+
+    if guild:
+        embed.set_footer(text=guild.name)
+
+    return embed
 
 
-class RankSelectView(discord.ui.View):
-    def __init__(self, guild: discord.Guild):
-        super().__init__(timeout=180)
-        self.add_item(RankSelect(guild))
-
-
-async def change_staff_role(ctx, member, role, action):
-    if member.id == ctx.author.id or member.id == ctx.guild.owner_id or role.is_default() or role.managed:
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} Action unauthorized or invalid role.", color=discord.Color.orange()))
+async def install_server_emojis(guild):
+    """Download and add Twemoji assets when the bot has permission."""
+    me = guild.me
+    if not me or not me.guild_permissions.manage_emojis_and_stickers:
+        logging.info("Skipping emoji setup in %s: missing emoji permissions.", guild.name)
         return
-    try:
-        if action == "promote":
-            await member.add_roles(role, reason=f"Staff promotion by {ctx.author}")
-            result = "promoted"
-        else:
-            await member.remove_roles(role, reason=f"Staff demotion by {ctx.author}")
-            result = "demoted"
 
-        await send_promodemo_embed(ctx.guild, member, role, result, ctx.author)
-        await audit(ctx.guild, f"Staff {result}: {member} | Role: {role.name} | By: {ctx.author}")
-        emoji = EMOJIS['promo'] if result == "promoted" else EMOJIS['demo']
-        await ctx.reply(embed=discord.Embed(description=f"{emoji} {member.mention} was **{result}**: {role.mention}", color=discord.Color.green() if result == "promoted" else discord.Color.red()))
-    except discord.Forbidden:
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Missing permissions to modify roles.", color=discord.Color.red()))
+    existing_names = {emoji.name for emoji in guild.emojis}
 
-
-# =========================
-# MANAGEMENT & STAFF COMMANDS
-# =========================
-
-@bot.command()
-@commands.guild_only()
-@is_supervisor()
-async def promo(ctx, staff: discord.Member, role: discord.Role = None):
-    """Promotes a staff member."""
-    if role is None:
-        ladder = config.get("rank_ladders", {}).get(str(ctx.guild.id))
-        if not ladder:
-            await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} No rank ladder configured.", color=discord.Color.orange()))
-            return
-        user_role_ids = [r.id for r in staff.roles]
-        matched_index = next((idx for idx, r_id in enumerate(ladder) if r_id in user_role_ids), -1)
-        next_index = matched_index + 1
-        if next_index >= len(ladder):
-            await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} Already at the highest rank!", color=discord.Color.orange()))
-            return
-        role = ctx.guild.get_role(ladder[next_index])
-    await change_staff_role(ctx, staff, role, "promote")
-
-
-@bot.command()
-@commands.guild_only()
-@is_supervisor()
-async def demo(ctx, staff: discord.Member, role: discord.Role = None):
-    """Demotes a staff member."""
-    if role is None:
-        ladder = config.get("rank_ladders", {}).get(str(ctx.guild.id))
-        if not ladder:
-            await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} No rank ladder configured.", color=discord.Color.orange()))
-            return
-        user_role_ids = [r.id for r in staff.roles]
-        matched_index = next((idx for idx, r_id in enumerate(ladder) if r_id in user_role_ids), -1)
-        prev_index = matched_index - 1
-        if prev_index < 0:
-            await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} Already at the lowest rank!", color=discord.Color.orange()))
-            return
-        role = ctx.guild.get_role(ladder[prev_index])
-    await change_staff_role(ctx, staff, role, "demote")
-
-
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def super(ctx, member: discord.Member):
-    """Assigns the supervisor role."""
-    role_id = guild_setting("supervisor_roles", ctx.guild.id)
-    if not role_id:
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['warning']} Supervisor role not set up.", color=discord.Color.orange()))
-        return
-    role = ctx.guild.get_role(int(role_id))
-    await member.add_roles(role, reason=f"Supervisor assigned by {ctx.author}")
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Assigned supervisor role to {member.mention}.", color=discord.Color.green()))
-
-
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def staff(ctx, member: discord.Member):
-    """Assigns Junior Moderator and Staff Team roles automatically."""
-    jr = discord.utils.find(lambda r: "junior moderator" in r.name.lower(), ctx.guild.roles)
-    st = discord.utils.find(lambda r: "staff team" in r.name.lower(), ctx.guild.roles)
-    roles = [r for r in [jr, st] if r]
-    if not roles:
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Roles not found.", color=discord.Color.red()))
-        return
-    await member.add_roles(*roles, reason=f"Staff roles assigned by {ctx.author}")
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Assigned staff roles to {member.mention}.", color=discord.Color.green()))
-
-
-@bot.command()
-@commands.guild_only()
-@is_supervisor()
-async def role(ctx, member: discord.Member, role: discord.Role):
-    """Toggles a role on a member."""
-    if role in member.roles:
-        await member.remove_roles(role)
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['demo']} Removed {role.mention} from {member.mention}.", color=discord.Color.red()))
-    else:
-        await member.add_roles(role)
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['promo']} Added {role.mention} to {member.mention}.", color=discord.Color.green()))
-
-
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def steal(ctx, emoji: str, name: str = None):
-    """Steals an emoji into the server."""
-    import re
-    match = re.match(r"<(a?):([a-zA-Z0-9_]+):([0-9]+)>", emoji)
-    if not match:
-        await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} Invalid custom emoji.", color=discord.Color.red()))
-        return
-    animated, e_name, e_id = match.groups()
-    url = f"https://cdn.discordapp.com/emojis/{e_id}.{'gif' if animated=='a' else 'png'}?v=1"
     async with aiohttp.ClientSession() as session:
-        async with session.get(url) as resp:
-            image_bytes = await resp.read()
-    new_emoji = await ctx.guild.create_custom_emoji(name=name or e_name, image=image_bytes)
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Stole and added {new_emoji}!", color=discord.Color.green()))
+        for name, codepoint in TWEMOJI_ASSETS.items():
+            if name in existing_names:
+                continue
+
+            url = (
+                "https://raw.githubusercontent.com/twitter/twemoji/"
+                f"master/assets/72x72/{codepoint}.png"
+            )
+
+            try:
+                async with session.get(
+                    url,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as response:
+                    if response.status != 200:
+                        logging.warning("Could not download emoji %s", name)
+                        continue
+                    image_data = await response.read()
+
+                await guild.create_custom_emoji(
+                    name=name,
+                    image=image_data,
+                    reason="Install Twemoji set (CC BY 4.0)",
+                )
+
+                # Avoid sending many create requests at once.
+                await asyncio.sleep(1)
+
+            except discord.HTTPException as exc:
+                logging.warning("Could not add emoji %s in %s: %s", name, guild.name, exc)
+                if getattr(exc, "status", None) == 400:
+                    break
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                logging.warning("Could not download emoji %s", name)
 
 
-# =========================
-# MODERATION COMMANDS
-# =========================
+# -------------------------
+# EVENTS
+# -------------------------
+
+@bot.event
+async def on_ready():
+    logging.info("Logged in as %s", bot.user)
+
+    for guild in bot.guilds:
+        await install_server_emojis(guild)
+
+
+@bot.event
+async def on_member_join(member):
+    channel_id = config.get("welcome_channels", {}).get(str(member.guild.id))
+    if not channel_id:
+        return
+
+    channel = member.guild.get_channel(int(channel_id))
+    if not channel:
+        return
+
+    embed = make_embed(
+        member.guild,
+        f"{get_emoji(member.guild, 'bot_wave', '👋')} Welcome!",
+        f"Welcome to **{member.guild.name}**, {member.mention}!",
+        discord.Color.green(),
+    )
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="Member number", value=str(member.guild.member_count), inline=True)
+    embed.add_field(name="Account created", value=discord.utils.format_dt(member.created_at, style="R"), inline=True)
+
+    await channel.send(
+        embed=embed,
+        allowed_mentions=discord.AllowedMentions(users=True),
+    )
+
+
+# -------------------------
+# GENERAL COMMANDS
+# -------------------------
+
+@bot.command(name="help")
+async def help_command(ctx):
+    embed = make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_info', 'ℹ️')} Bot Commands",
+        f"Command prefix: `{PREFIX}`\nUse the commands below to manage and explore the server.",
+    )
+
+    embed.add_field(
+        name="Moderation",
+        value="`kick`, `ban`, `unban`, `timeout`, `untimeout`, `purge`, `warn`, `warnings`, `clearwarnings`",
+        inline=False,
+    )
+    embed.add_field(
+        name="Channels and server",
+        value="`slowmode`, `lock`, `unlock`, `announce`, `setwelcome`, `serverinfo`, `roleinfo`",
+        inline=False,
+    )
+    embed.add_field(
+        name="Member tools",
+        value="`userinfo`, `avatar`, `poll`, `ping`, `emojiinfo`",
+        inline=False,
+    )
+    embed.add_field(
+        name="Fun",
+        value="`coinflip`, `roll`, `choose`, `8ball`",
+        inline=False,
+    )
+    embed.set_footer(text="Some commands require server permissions.")
+    await ctx.reply(embed=embed, mention_author=False)
+
 
 @bot.command()
-@commands.guild_only()
-@commands.has_permissions(kick_members=True)
-async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Kicks a member."""
-    await member.kick(reason=reason)
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Kicked {member.mention} | Reason: {reason}", color=discord.Color.orange()))
-
-
-@bot.command()
-@commands.guild_only()
-@commands.has_permissions(ban_members=True)
-async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Bans a member."""
-    await member.ban(reason=reason)
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Banned {member.mention} | Reason: {reason}", color=discord.Color.red()))
-
-
-@bot.command()
-@commands.guild_only()
-@commands.has_permissions(manage_messages=True)
-async def clear(ctx, amount: int = 5):
-    """Purges messages."""
-    await ctx.channel.purge(limit=amount + 1)
-    msg = await ctx.send(embed=discord.Embed(description=f"{EMOJIS['success']} Cleared {amount} messages.", color=discord.Color.green()))
-    await msg.delete(delay=3)
-
-
-@bot.command()
-@commands.guild_only()
-@commands.has_permissions(manage_roles=True)
-async def mute(ctx, member: discord.Member, *, reason="No reason provided"):
-    """Timeouts a member."""
-    from datetime import timedelta
-    await member.timeout(timedelta(minutes=10), reason=reason)
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Timed out {member.mention} for 10 minutes.", color=discord.Color.orange()))
-
-
-# =========================
-# UTILITY & INFO COMMANDS
-# =========================
-
-@bot.command()
-@commands.guild_only()
 async def ping(ctx):
-    """Shows bot latency."""
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Pong! Latency: `{round(bot.latency * 1000)}ms`", color=discord.Color.blue()))
+    latency = round(bot.latency * 1000)
+    embed = make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} Pong!",
+        f"Bot latency: **{latency} ms**",
+        discord.Color.green(),
+    )
+    await ctx.reply(embed=embed)
 
 
 @bot.command()
 @commands.guild_only()
 async def serverinfo(ctx):
-    """Shows server info."""
-    g = ctx.guild
-    embed = discord.Embed(title=f"{EMOJIS['gear']} {g.name} Information", color=discord.Color.blurple())
-    embed.add_field(name=f"{EMOJIS['user']} Owner", value=g.owner, inline=True)
-    embed.add_field(name=f"{EMOJIS['ladder']} Members", value=g.member_count, inline=True)
-    embed.add_field(name=f"{EMOJIS['success']} Created On", value=g.created_at.strftime("%Y-%m-%d"), inline=True)
+    guild = ctx.guild
+    embed = make_embed(
+        guild,
+        f"{get_emoji(guild, 'bot_info', 'ℹ️')} {guild.name}",
+        "Server information",
+    )
+
+    embed.add_field(name="Owner", value=str(guild.owner or "Unknown"), inline=True)
+    embed.add_field(name="Members", value=str(guild.member_count), inline=True)
+    embed.add_field(name="Channels", value=str(len(guild.channels)), inline=True)
+    embed.add_field(name="Roles", value=str(len(guild.roles)), inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, style="D"), inline=True)
+
+    if guild.icon:
+        embed.set_thumbnail(url=guild.icon.url)
+
     await ctx.reply(embed=embed)
 
 
 @bot.command()
 @commands.guild_only()
 async def userinfo(ctx, member: discord.Member = None):
-    """Shows user info."""
-    m = member or ctx.author
-    embed = discord.Embed(title=f"{EMOJIS['user']} {m} Info", color=m.color)
-    embed.set_thumbnail(url=m.display_avatar.url)
-    embed.add_field(name="ID", value=m.id, inline=True)
-    embed.add_field(name="Joined", value=m.joined_at.strftime("%Y-%m-%d") if m.joined_at else "N/A", inline=True)
+    member = member or ctx.author
+    embed = make_embed(ctx.guild, f"User information: {member}", color=member.color)
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.add_field(name="User ID", value=str(member.id), inline=True)
+    embed.add_field(name="Account created", value=discord.utils.format_dt(member.created_at, style="D"), inline=True)
+    embed.add_field(
+        name="Joined server",
+        value=discord.utils.format_dt(member.joined_at, style="D") if member.joined_at else "Unknown",
+        inline=True,
+    )
+    embed.add_field(
+        name="Roles",
+        value=", ".join(role.mention for role in member.roles[1:])[:1000] or "No roles",
+        inline=False,
+    )
     await ctx.reply(embed=embed)
 
 
 @bot.command()
 @commands.guild_only()
 async def avatar(ctx, member: discord.Member = None):
-    """Shows user avatar."""
-    m = member or ctx.author
-    embed = discord.Embed(title=f"{EMOJIS['user']} Avatar for {m}", color=discord.Color.blurple())
-    embed.set_image(url=m.display_avatar.url)
+    member = member or ctx.author
+    embed = make_embed(ctx.guild, f"Avatar: {member}")
+    embed.set_image(url=member.display_avatar.url)
     await ctx.reply(embed=embed)
 
 
-# =========================
-# FUN & MISC COMMANDS
-# =========================
+@bot.command()
+@commands.guild_only()
+async def roleinfo(ctx, role: discord.Role):
+    embed = make_embed(ctx.guild, f"Role: {role.name}", color=role.color or discord.Color.blurple())
+    embed.add_field(name="ID", value=str(role.id), inline=True)
+    embed.add_field(name="Members", value=str(len(role.members)), inline=True)
+    embed.add_field(name="Mentionable", value="Yes" if role.mentionable else "No", inline=True)
+    embed.add_field(name="Created", value=discord.utils.format_dt(role.created_at, style="D"), inline=True)
+
+    permissions = [
+        permission.replace("_", " ").title()
+        for permission, enabled in role.permissions
+        if enabled
+    ]
+    embed.add_field(name="Permissions", value=", ".join(permissions)[:1000] or "None", inline=False)
+    await ctx.reply(embed=embed)
+
+
+# -------------------------
+# MODERATION COMMANDS
+# -------------------------
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(kick_members=True)
+@commands.bot_has_permissions(kick_members=True)
+async def kick(ctx, member: discord.Member, *, reason="No reason provided"):
+    if member == ctx.guild.owner or member.top_role >= ctx.author.top_role:
+        await ctx.reply(embed=make_embed(ctx.guild, "Cannot kick member", "Their role is equal to or higher than yours.", discord.Color.red()))
+        return
+
+    await member.kick(reason=f"{reason} | By {ctx.author}")
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} Member kicked",
+        f"**Member:** {member}\n**Reason:** {reason}",
+        discord.Color.orange(),
+    ))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(ban_members=True)
+@commands.bot_has_permissions(ban_members=True)
+async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
+    if member == ctx.guild.owner or member.top_role >= ctx.author.top_role:
+        await ctx.reply(embed=make_embed(ctx.guild, "Cannot ban member", "Their role is equal to or higher than yours.", discord.Color.red()))
+        return
+
+    await member.ban(reason=f"{reason} | By {ctx.author}")
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} Member banned",
+        f"**Member:** {member}\n**Reason:** {reason}",
+        discord.Color.red(),
+    ))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(ban_members=True)
+@commands.bot_has_permissions(ban_members=True)
+async def unban(ctx, user_id: int, *, reason="No reason provided"):
+    user = await bot.fetch_user(user_id)
+    await ctx.guild.unban(user, reason=f"{reason} | By {ctx.author}")
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} User unbanned",
+        f"**User:** {user}\n**Reason:** {reason}",
+        discord.Color.green(),
+    ))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+@commands.bot_has_permissions(moderate_members=True)
+async def timeout(ctx, member: discord.Member, minutes: int, *, reason="No reason provided"):
+    from datetime import timedelta
+
+    if minutes < 1 or minutes > 40320:
+        await ctx.reply(embed=make_embed(ctx.guild, "Invalid duration", "Choose between 1 minute and 28 days.", discord.Color.red()))
+        return
+
+    if member == ctx.guild.owner or member.top_role >= ctx.author.top_role:
+        await ctx.reply(embed=make_embed(ctx.guild, "Cannot timeout member", "Their role is equal to or higher than yours.", discord.Color.red()))
+        return
+
+    await member.timeout(timedelta(minutes=minutes), reason=f"{reason} | By {ctx.author}")
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_warning', '⚠️')} Member timed out",
+        f"**Member:** {member.mention}\n**Duration:** {minutes} minutes\n**Reason:** {reason}",
+        discord.Color.orange(),
+    ))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(moderate_members=True)
+@commands.bot_has_permissions(moderate_members=True)
+async def untimeout(ctx, member: discord.Member, *, reason="Timeout removed by staff"):
+    await member.timeout(None, reason=f"{reason} | By {ctx.author}")
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} Timeout removed",
+        f"Removed timeout for {member.mention}.\n**Reason:** {reason}",
+        discord.Color.green(),
+    ))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+@commands.bot_has_permissions(manage_messages=True)
+async def purge(ctx, amount: int = 10):
+    if amount < 1 or amount > 100:
+        await ctx.reply(embed=make_embed(ctx.guild, "Invalid amount", "Choose between 1 and 100 messages.", discord.Color.red()))
+        return
+
+    deleted = await ctx.channel.purge(limit=amount + 1)
+    embed = make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_check', '✅')} Messages deleted",
+        f"Deleted **{max(0, len(deleted) - 1)}** messages.",
+        discord.Color.green(),
+    )
+    await ctx.send(embed=embed, delete_after=5)
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+async def warn(ctx, member: discord.Member, *, reason="No reason provided"):
+    key = f"{ctx.guild.id}:{member.id}"
+    entries = config.setdefault("warnings", {}).setdefault(key, [])
+    entries.append({
+        "reason": reason[:500],
+        "moderator": ctx.author.id,
+        "date": discord.utils.utcnow().isoformat(),
+    })
+    save_config()
+
+    embed = make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_warning', '⚠️')} Warning added",
+        f"{member.mention} received a warning.",
+        discord.Color.orange(),
+    )
+    embed.add_field(name="Reason", value=reason[:1024], inline=False)
+    embed.add_field(name="Warning count", value=str(len(entries)), inline=True)
+    await ctx.reply(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command(name="warnings")
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+async def warnings_command(ctx, member: discord.Member):
+    entries = config.get("warnings", {}).get(f"{ctx.guild.id}:{member.id}", [])
+    embed = make_embed(ctx.guild, f"Warnings: {member}", color=discord.Color.orange())
+
+    if not entries:
+        embed.description = "This member has no recorded warnings."
+    else:
+        for index, warning in enumerate(entries[-10:], start=max(1, len(entries) - 9)):
+            embed.add_field(
+                name=f"Warning {index} • {warning.get('date', '')[:10]}",
+                value=f"{warning.get('reason', 'No reason')[:900]} • Moderator <@{warning.get('moderator', 0)}>",
+                inline=False,
+            )
+
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"{len(entries)} warning(s) total")
+    await ctx.reply(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_messages=True)
+async def clearwarnings(ctx, member: discord.Member):
+    config.setdefault("warnings", {}).pop(f"{ctx.guild.id}:{member.id}", None)
+    save_config()
+    await ctx.reply(embed=make_embed(ctx.guild, "Warnings cleared", f"Cleared warnings for {member.mention}.", discord.Color.green()))
+
+
+# -------------------------
+# CHANNEL AND SERVER TOOLS
+# -------------------------
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_channels=True)
+@commands.bot_has_permissions(manage_channels=True)
+async def slowmode(ctx, seconds: int):
+    if seconds < 0 or seconds > 21600:
+        await ctx.reply(embed=make_embed(ctx.guild, "Invalid slowmode", "Choose between 0 and 21600 seconds.", discord.Color.red()))
+        return
+
+    await ctx.channel.edit(slowmode_delay=seconds, reason=f"Changed by {ctx.author}")
+    await ctx.reply(embed=make_embed(ctx.guild, "Slowmode updated", f"Slowmode is now **{seconds} seconds**.", discord.Color.green()))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_channels=True)
+@commands.bot_has_permissions(manage_channels=True)
+async def lock(ctx, *, reason="Channel locked"):
+    overwrite = ctx.channel.overwrites_for(ctx.guild.default_role)
+    overwrite.send_messages = False
+    await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite, reason=reason)
+    await ctx.reply(embed=make_embed(ctx.guild, "🔒 Channel locked", reason, discord.Color.red()))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_channels=True)
+@commands.bot_has_permissions(manage_channels=True)
+async def unlock(ctx, *, reason="Channel unlocked"):
+    overwrite = ctx.channel.overwrites_for(ctx.guild.default_role)
+    overwrite.send_messages = None
+    await ctx.channel.set_permissions(ctx.guild.default_role, overwrite=overwrite, reason=reason)
+    await ctx.reply(embed=make_embed(ctx.guild, "🔓 Channel unlocked", reason, discord.Color.green()))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_nicknames=True)
+@commands.bot_has_permissions(manage_nicknames=True)
+async def nick(ctx, member: discord.Member, *, nickname: str = None):
+    await member.edit(nick=nickname, reason=f"Changed by {ctx.author}")
+    label = nickname or member.name
+    await ctx.reply(embed=make_embed(ctx.guild, "Nickname updated", f"{member.mention} is now **{label}**.", discord.Color.green()))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_guild=True)
+async def setwelcome(ctx, channel: discord.TextChannel = None):
+    if channel is None:
+        config.setdefault("welcome_channels", {}).pop(str(ctx.guild.id), None)
+        save_config()
+        await ctx.reply(embed=make_embed(ctx.guild, "Welcome messages disabled", color=discord.Color.orange()))
+        return
+
+    config.setdefault("welcome_channels", {})[str(ctx.guild.id)] = channel.id
+    save_config()
+    await ctx.reply(embed=make_embed(ctx.guild, "Welcome channel set", f"New members will be welcomed in {channel.mention}.", discord.Color.green()))
+
+
+@bot.command()
+@commands.guild_only()
+@commands.has_permissions(manage_guild=True)
+async def announce(ctx, channel: discord.TextChannel, *, message: str):
+    embed = make_embed(
+        ctx.guild,
+        f"{get_emoji(ctx.guild, 'bot_notice', '📢')} Announcement",
+        message[:4000],
+        discord.Color.gold(),
+    )
+    embed.set_author(name=ctx.guild.name, icon_url=ctx.guild.icon.url if ctx.guild.icon else None)
+    embed.set_footer(text=f"Posted by {ctx.author.display_name}")
+
+    await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+    await ctx.reply(embed=make_embed(ctx.guild, "Announcement posted", f"Sent to {channel.mention}.", discord.Color.green()))
+
+
+@bot.command()
+@commands.guild_only()
+async def poll(ctx, *, question: str):
+    embed = make_embed(ctx.guild, "📊 Poll", question[:4000])
+    embed.set_author(name=ctx.author.display_name, icon_url=ctx.author.display_avatar.url)
+
+    message = await ctx.send(embed=embed)
+    await message.add_reaction("👍")
+    await message.add_reaction("👎")
+
+
+@bot.command()
+@commands.guild_only()
+async def emojiinfo(ctx):
+    embed = make_embed(
+        ctx.guild,
+        "Custom emoji setup",
+        "The bot tries to add a set of Twemoji images when it starts. It needs the **Manage Emojis and Stickers** permission, and the server needs available emoji slots.",
+    )
+    embed.add_field(name="Source", value="[Twemoji project](https://github.com/twitter/twemoji)", inline=False)
+    embed.add_field(name="License", value="[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)", inline=False)
+    await ctx.reply(embed=embed)
+
+
+# -------------------------
+# FUN COMMANDS
+# -------------------------
 
 @bot.command()
 async def coinflip(ctx):
-    """Flips a coin."""
     result = random.choice(["Heads", "Tails"])
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} The coin landed on: **{result}**", color=discord.Color.gold()))
+    await ctx.reply(embed=make_embed(ctx.guild, "🪙 Coin flip", f"It landed on **{result}**!", discord.Color.gold()))
 
 
 @bot.command()
-async def roll(ctx):
-    """Rolls a dice (1-6)."""
-    result = random.randint(1, 6)
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} You rolled a **{result}**!", color=discord.Color.gold()))
+async def roll(ctx, sides: int = 6):
+    if sides < 2 or sides > 1000000:
+        await ctx.reply(embed=make_embed(ctx.guild, "Invalid dice", "Choose from 2 to 1,000,000 sides.", discord.Color.red()))
+        return
 
-
-# =========================
-# SETUP COMMANDS
-# =========================
-
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def setranks(ctx):
-    view = RankSelectView(ctx.guild)
-    embed = discord.Embed(title=f"{EMOJIS['ladder']} Rank Ladder Setup", description="Select roles in order from lowest to highest.", color=discord.Color.blurple())
-    await ctx.reply(embed=embed, view=view)
+    result = random.randint(1, sides)
+    await ctx.reply(embed=make_embed(ctx.guild, "🎲 Dice roll", f"You rolled **{result}** on a {sides}-sided die.", discord.Color.gold()))
 
 
 @bot.command()
-@commands.guild_only()
-@is_owner()
-async def setstaffsupervisor(ctx, role: discord.Role):
-    config["supervisor_roles"][str(ctx.guild.id)] = role.id
-    save_config()
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Supervisor role set to {role.mention}.", color=discord.Color.green()))
+async def choose(ctx, *choices):
+    if len(choices) < 2:
+        await ctx.reply(embed=make_embed(ctx.guild, "Give me choices", "Example: `>choose pizza sushi tacos`", discord.Color.orange()))
+        return
+
+    result = random.choice(choices)
+    await ctx.reply(embed=make_embed(ctx.guild, "🎯 Choice", f"I choose **{result}**!", discord.Color.gold()))
 
 
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def setpromodemo(ctx, channel: discord.TextChannel):
-    config["promodemo_channels"][str(ctx.guild.id)] = channel.id
-    save_config()
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Promo channel set to {channel.mention}.", color=discord.Color.green()))
+@bot.command(name="8ball")
+async def eight_ball(ctx, *, question: str):
+    answers = [
+        "Yes, definitely.",
+        "It looks likely.",
+        "Ask again later.",
+        "I cannot predict that right now.",
+        "Probably not.",
+        "No.",
+    ]
+    await ctx.reply(embed=make_embed(
+        ctx.guild,
+        "🎱 Magic 8-Ball",
+        f"**Question:** {question[:1000]}\n**Answer:** {random.choice(answers)}",
+        discord.Color.blurple(),
+    ))
 
 
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def setaudit(ctx, channel: discord.TextChannel):
-    config["audit_channels"][str(ctx.guild.id)] = channel.id
-    save_config()
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['success']} Audit channel set to {channel.mention}.", color=discord.Color.green()))
-
-
-@bot.command()
-@commands.guild_only()
-@is_owner()
-async def staffsettings(ctx):
-    embed = discord.Embed(title=f"{EMOJIS['gear']} Bot Settings Configured", color=discord.Color.blurple())
-    await ctx.reply(embed=embed)
-
-
-# =========================
-# HELP COMMAND
-# =========================
-
-@bot.command(name="help")
-async def help_command(ctx):
-    embed = discord.Embed(title=f"{EMOJIS['gear']} All-In-One Bot Command Center", description="Here are all available command modules:", color=discord.Color.blurple())
-    embed.add_field(name=f"{EMOJIS['shield']} Staff & Management", value="`>promo`, `>demo`, `>super`, `>staff`, `>role`, `>steal`", inline=False)
-    embed.add_field(name=f"{EMOJIS['warning']} Moderation", value="`>kick`, `>ban`, `>clear`, `>mute`", inline=False)
-    embed.add_field(name=f"{EMOJIS['user']} Utility & Info", value="`>ping`, `>serverinfo`, `>userinfo`, `>avatar`", inline=False)
-    embed.add_field(name=f"{EMOJIS['success']} Fun & Games", value="`>coinflip`, `>roll`", inline=False)
-    embed.add_field(name=f"{EMOJIS['gear']} Setup", value="`>setranks`, `>setstaffsupervisor`, `>setpromodemo`, `>setaudit`, `>staffsettings`", inline=False)
-    await ctx.reply(embed=embed, mention_author=False)
-
-
-# =========================
-# EVENTS
-# =========================
-
-@bot.event
-async def on_ready():
-    logging.info("Logged in as %s", bot.user)
-
+# -------------------------
+# ERROR HANDLING
+# -------------------------
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
-    await ctx.reply(embed=discord.Embed(description=f"{EMOJIS['error']} An error occurred or permissions are missing.", color=discord.Color.red()))
+
+    if isinstance(error, commands.MissingPermissions):
+        message = "You don't have permission to use that command."
+    elif isinstance(error, commands.BotMissingPermissions):
+        message = "The bot is missing a permission needed for that command."
+    elif isinstance(error, commands.MissingRequiredArgument):
+        message = f"Missing an argument: `{error.param.name}`. Use `>help` to see commands."
+    elif isinstance(error, commands.BadArgument):
+        message = "I couldn't understand one of the command arguments. Check the command and try again."
+    else:
+        logging.exception("Command error", exc_info=error)
+        message = "Something went wrong while running that command."
+
+    await ctx.reply(embed=make_embed(ctx.guild, "Command error", message, discord.Color.red()))
 
 
 load_config()
+
+if not TOKEN:
+    raise RuntimeError("Set the BOT_TOKEN environment variable before starting the bot.")
+
 bot.run(TOKEN)
