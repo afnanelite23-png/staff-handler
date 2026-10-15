@@ -225,16 +225,17 @@ class RankSelect(discord.ui.Select):
     def __init__(self, guild: discord.Guild):
         roles = [r for r in guild.roles if not r.is_default() and not r.managed][:25]
         
+        parsed_emoji = None
         try:
-            bullet_emoji = discord.PartialEmoji.from_str(EMOJIS["bullet"])
+            parsed_emoji = discord.PartialEmoji.from_str(EMOJIS["bullet"])
         except Exception:
-            bullet_emoji = None
+            pass
 
         options = [
             discord.SelectOption(
                 label=role.name[:100], 
                 value=str(role.id), 
-                emoji=bullet_emoji
+                emoji=parsed_emoji
             ) for role in roles
         ]
 
